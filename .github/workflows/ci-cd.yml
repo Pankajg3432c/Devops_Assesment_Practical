@@ -1,61 +1,70 @@
-name: CI-CD Pipeline
+name: Safety Shield CI Pipeline
 
 on:
-  push:
+  pull_request:
     branches:
       - main
-
-env:
-  REGISTRY: docker.io
-  IMAGE_NAME: swati9455/fastapi-app
+      - production
 
 jobs:
-  build-and-deploy:
+  ci:
+    name: Lint, Test & Docker Push
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      # Checkout Code
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      # Setup Python
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: 3.11
+          python-version: "3.11"
 
+      # Install Dependencies
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r app/requirements.txt
+          pip install flake8 pytest
 
-      - name: Run FastAPI simple test
-        run: echo "Tests passed!"
+      # Linting
+      - name: Run Linting
+        run: |
+          flake8 app
 
-      - name: Login to DockerHub
+      # Unit Tests
+      - name: Run Unit Tests
+        run: |
+          pytest
+
+      # Login to Docker Hub (ONLY IF TESTS PASS)
+      - name: Login to Docker Hub
+        if: success()
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build Docker image
+      # Build Docker Image 
+      - name: Build Docker Image
+        if: success()
         run: |
-          docker build -t $REGISTRY/${IMAGE_NAME}:${{ github.run_number }} .
-          docker tag $REGISTRY/${IMAGE_NAME}:${{ github.run_number }} $REGISTRY/${IMAGE_NAME}:latest
+          docker build -t pankajg3432c/fastapi-app:latest .
 
-      - name: Push Docker image
+      #  Push Docker Image to Docker Hub
+      - name: Push Docker Image
+        if: success()
         run: |
-          docker push $REGISTRY/${IMAGE_NAME}:${{ github.run_number }}
-          docker push $REGISTRY/${IMAGE_NAME}:latest
+          docker push pankajg3432c/fastapi-app:latest
 
-      - name: Configure kubectl
+      #  Notify Slack / Discord on Failure
+      - name: Notify on Failure
+        if: failure()
         run: |
-          mkdir ~/.kube
-          echo "${{ secrets.KUBE_CONFIG }}" > ~/.kube/config
-
-      - name: Apply Kubernetes Manifests
-        run: |
-          kubectl apply -f k8s/deployment.yaml
-          kubectl apply -f k8s/service.yaml
-
-      - name: Check rollout status
-        run: |
-          kubectl rollout status deployment/fastapi-deployment
-
+          curl -X POST -H "Content-Type: application/json" \
+          --data '{
+            "content": "🚨 *Safety Shield CI Failed!* ❌\nRepo: ${{ github.repository }}\nPR: ${{ github.event.pull_request.html_url }}"
+          }' \
+          ${{ secrets.DISCORD_WEBHOOK_URL }}
